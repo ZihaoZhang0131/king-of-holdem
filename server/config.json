@@ -1,0 +1,86 @@
+{
+  "startingStack": 2000,
+  "handsPerLevel": 10,
+  "blinds": [
+    [10, 20],
+    [15, 30],
+    [25, 50],
+    [50, 100],
+    [75, 150],
+    [100, 200],
+    [150, 300],
+    [200, 400],
+    [300, 600],
+    [500, 1000],
+    [800, 1600],
+    [1000, 2000],
+    [1500, 3000],
+    [2500, 5000]
+  ],
+  "maxHands": 400,
+  "recentHands": 5,
+  "decisionTimeoutMs": 45000,
+  "pace": {
+    "deal": 1800,
+    "action": 900,
+    "street": 700,
+    "board": 1300,
+    "collect": 700,
+    "showdown": 2400,
+    "end": 3200
+  },
+  "defaults": {
+    "temperature": 0.8,
+    "maxTokens": 2000,
+    "jsonMode": true,
+    "extraBody": {
+      "reasoning_effort": "low"
+    }
+  },
+  "players": [
+    {
+      "name": "Claude",
+      "model": "deepseek-flash",
+      "style": "稳健理性的紧凶型（TAG）。翻前范围偏紧、重视位置，拿到好牌果断价值下注；很少做大额诈唬，面对大注更愿意相信对手。语气温和、讲道理，像在认真复盘。"
+    },
+    {
+      "name": "OpenAI",
+      "model": "deepseek-flash",
+      "style": "均衡的 GTO 派。各个位置用标准开池尺度（约 2.2–2.5bb），诈唬与价值下注保持平衡比例，不轻易被读透。语气冷静专业，像扑克教练在讲解。"
+    },
+    {
+      "name": "Gemini",
+      "model": "deepseek-flash",
+      "style": "激进的松凶型（LAG）。翻前开池和 3-bet 频率都高，翻后喜欢持续下注、主动施压，敢在吓人的牌面开火逼弃。语气自信张扬、带点挑衅。"
+    },
+    {
+      "name": "智谱",
+      "model": "deepseek-flash",
+      "style": "数学流的紧凶型。每次跟注都先算底池赔率和隐含赔率，严格按牌力区间行动，几乎不靠感觉；短码时遵守推弃（push/fold）纪律。语气严谨，喜欢报数字。"
+    },
+    {
+      "name": "Kimi",
+      "model": "deepseek-flash",
+      "style": "狡猾的陷阱型。强牌常慢打、过牌加注，弱牌偶尔在听牌落空的牌面做反常诈唬，喜欢让对手猜不透。语气俏皮神秘，带点月亮式的冷幽默。"
+    },
+    {
+      "name": "DeepSeek",
+      "model": "deepseek-flash",
+      "style": "深度剥削型。紧盯对手笔记，针对紧的人多偷盲、针对松的人多价值下注，发现对手弱点就加大打击力度；没读到信息时保持朴素稳健。语气沉稳克制，喜欢一句话点破对手。"
+    }
+  ],
+  "modes": {
+    "squid": {
+      "enabled": true,
+      "unitBB": 2,
+      "lastDouble": true
+    },
+    "royale": {
+      "enabled": false,
+      "zoneEvery": 6,
+      "anteStep": 0.25,
+      "bountyPct": 0.2,
+      "finalCircle": 3
+    }
+  }
+}

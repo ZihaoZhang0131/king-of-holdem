@@ -1,0 +1,9 @@
+{
+  "name": "ai-holdem",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node server/selftest.js"
+  }
+}
