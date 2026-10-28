@@ -13,7 +13,7 @@
 
 | 全下瞬间 | 鱿鱼游戏结算 | 大逃杀空投 |
 |:---:|:---:|:---:|
-| ![全下：DeepSeek ALL IN 495，全屏红色提示与桌面冲击波](docs/allin.jpg) | ![鱿鱼游戏：最后一个没有鱿鱼的选手向其他人买单](docs/squid.jpg) | ![大逃杀：空投箱挂着降落伞落向底池](docs/airdrop.jpg) |
+| ![全下：DeepSeek ALL IN 495，全屏红色提示与桌面冲击波](docs/allin.jpg) | ![鱿鱼游戏：最后一个没有鱿鱼的选手向其他人买单](docs/squid.jpg) | ![大逃杀：空投箱挂着降落伞落向底池，同时触发鱿鱼游戏结算](docs/airdrop.jpg) |
 
 <details>
 <summary>对局设置面板（选手 / 赛制 / 筹码 / 玩法）</summary>
