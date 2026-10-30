@@ -12,11 +12,11 @@ import { equity, bestHand, bestCombo, handName } from './poker.js';
  *   stage:   'preflop' | 'flop' | 'turn' | 'river' | 'showdown',
  *   board:   ['Ah', 'Kd', '7c'],       // 公共牌；编码 = 点数(23456789TJQKA) + 花色(s h d c)
  *   pot:     number,                   // 已收进底池的筹码（不含本轮各家面前的下注）
- *   dealer:  number,                   // 庄位座位号 0-5
+ *   dealer:  number,                   // 庄位座位号 0-6
  *   toAct:   number,                   // 正在思考的座位号，-1 表示无人
  *   blinds:  [sb, bb],
  *   message: string,                   // 顶部横幅文字，可为空
- *   players: [{                        // 长度 6，按座位顺序（顺时针 = 行动顺序）
+ *   players: [{                        // 长度 7（6 个 AI + 玩家座位），按座位顺序（顺时针 = 行动顺序）；sittingOut 的座位整个隐藏
  *     stack, bet,                      // 剩余筹码 / 本轮面前已下注
  *     cards: ['As', 'Kd'] | ['?', '?'] | null,   // '?' = 未知只显示牌背；null = 本手不在局
  *     folded, allIn, revealed,         // revealed: 亮牌
@@ -30,8 +30,10 @@ import { equity, bestHand, bestCombo, handName } from './poker.js';
 export const FELT = { a: 4.4, b: 2.7, y: 1.0 };
 const CARD = { w: 0.58, h: 0.81, t: 0.012 };
 const CHIP = { r: 0.11, h: 0.032 };
-const POT_POS = new THREE.Vector3(0, FELT.y, 1.35); // 选手在远端扇形排开，底池放在荷官面前，和公共牌留出间距
-const DECK_POS = new THREE.Vector3(-1.15, FELT.y, 1.55); // 荷官正前方、底池左侧：远离所有选手的底牌，不会挡住两端座位
+// 观战：选手在远端扇形排开，底池放在荷官面前，和公共牌留出间距；牌堆在荷官正前方、底池左侧，远离所有选手的底牌。
+// 玩家模式：近侧长边中央坐着玩家，底池和牌堆让到玩家两侧前方（见 createTable 的 play 参数）
+const POT_POS = new THREE.Vector3(0, FELT.y, 1.35);
+const DECK_POS = new THREE.Vector3(-1.15, FELT.y, 1.55);
 const BOARD_Z = 0.05;
 const boardPos = (k) => new THREE.Vector3((k - 2) * 0.68, FELT.y + CARD.t / 2 + 0.002, BOARD_Z);
 
@@ -57,7 +59,7 @@ const ACTION_FX = {
 const isOut = (st, p) => !!p.eliminated || (!p.cards && st.handId > 0);
 const SUIT_SYM = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const known = (c) => c && c !== '?';
-function cardHTML(code, cls = '') {
+export function cardHTML(code, cls = '') {
   if (!known(code)) return `<span class="pc back ${cls}"></span>`;
   return `<span class="pc s-${code[1]} ${cls}"><b>${code[0] === 'T' ? '10' : code[0]}</b><i>${SUIT_SYM[code[1]]}\uFE0E</i></span>`;
 }
@@ -118,7 +120,7 @@ function feltTexture() {
   x.font = '900 96px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
   x.fillText('德扑之王', W / 2, H * 0.93);
   x.font = '600 32px "Helvetica Neue", Arial, sans-serif';
-  x.fillText("KING OF HOLD'EM  ·  NO LIMIT  ·  6-MAX", W / 2, H * 0.965);
+  x.fillText("KING OF HOLD'EM  ·  NO LIMIT  ·  FREEZEOUT", W / 2, H * 0.965);
   return toTexture(c);
 }
 
@@ -314,7 +316,10 @@ function buildTableMesh() {
   return g;
 }
 
-export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }) {
+export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx, play = false }) {
+  if (play) { POT_POS.set(-1.2, FELT.y, 1.3); DECK_POS.set(1.25, FELT.y, 1.5); }
+  const N = seats.length;
+  let self = -1; // 玩家自己的座位（玩家模式）
   const root = new THREE.Group();
   scene.add(root);
   root.add(buildTableMesh());
@@ -352,13 +357,14 @@ export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }
   const geo = seats.map((s) => {
     const th = s.angle;
     const P = (f) => new THREE.Vector3(f * FELT.a * Math.cos(th), FELT.y, f * FELT.b * Math.sin(th));
-    const hole = P(0.74);
+    // 玩家座位在短轴方向，离桌心近：底牌往桌边靠，下注位也稍微外移，给中间的公共牌留空间
+    const hole = P(s.human ? 0.78 : 0.74);
     const yaw = Math.atan2(hole.x, hole.z);
     const side = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
     const inward = hole.clone().setY(0).normalize().negate();
     return {
       yaw, hole, side,
-      bet: P(0.5),
+      bet: P(s.human ? 0.53 : 0.5),
       stack: hole.clone().addScaledVector(side, 0.86),
       button: hole.clone().addScaledVector(side, -0.84).addScaledVector(inward, 0.12),
     };
@@ -707,8 +713,8 @@ export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }
     if (newHand) {
       let d = 0.35;
       for (let k = 0; k < 2; k++) {
-        for (let n = 1; n <= 6; n++) {
-          const i = (st.dealer + n) % 6;
+        for (let n = 1; n <= N; n++) {
+          const i = (st.dealer + n) % N;
           const p = st.players[i];
           if (!p.cards) continue;
           const c = makeCard(p.cards[k]);
@@ -814,6 +820,7 @@ export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }
     st.players.forEach((p, i) => {
       const h = huds[i];
       const active = st.toAct === i;
+      h.obj.visible = !p.sittingOut && !h.hidden;
       h.el.classList.toggle('active', active);
       h.el.classList.toggle('folded', !!p.folded);
       h.el.classList.toggle('winner', !!p.winner);
@@ -838,7 +845,7 @@ export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }
       else if (p.sittingOut) act = '未参赛';
       else if (p.eliminated) act = p.place ? `第 ${p.place} 名 · 出局` : '出局';
       else if (p.winner) act = (p.handName ? p.handName + ' · ' : '') + (winAmount[i] ? `赢 +${fmt(winAmount[i])}` : '获胜');
-      else if (active) act = '思考中';
+      else if (active) act = i === self ? '等你行动' : '思考中';
       else if (p.folded) act = '弃牌';
       else if (st.stage === 'showdown' && p.handName) act = p.handName;
       else if (p.lastAction) act = ACTION_NAME[p.lastAction.type] + (p.lastAction.amount ? ' ' + fmt(p.lastAction.amount) : '');
@@ -945,7 +952,7 @@ export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }
         return `${sep}<span class="tk ${k >= logShown ? 'new' : ''} ${k === actionLog.length - 1 ? 'last' : ''}" data-type="${ev.type}" style="--c:${brandHex[ev.seat]}"><i></i>${brands[ev.seat].name}<b>${ev.type === 'allin' ? '全下' : fx.verb}${amt}</b></span>`;
       });
       logShown = actionLog.length;
-      if (st.toAct >= 0) tokens.push(`<span class="tk think" style="--c:${brandHex[st.toAct]}"><i></i>${brands[st.toAct].name}<b>思考中</b></span>`);
+      if (st.toAct >= 0) tokens.push(`<span class="tk think" style="--c:${brandHex[st.toAct]}"><i></i>${brands[st.toAct].name}<b>${st.toAct === self ? '行动中' : '思考中'}</b></span>`);
       strip.innerHTML = `
         <div class="bs-rail">${tokens.join('')}</div>
         <div class="bs-main">
@@ -976,7 +983,7 @@ export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }
     const potText = `底池 ${fmt(Math.round(potCount.shown))}`;
     if (potNum.textContent !== potText) potNum.textContent = potText;
     // 真实模型思考可能要好几秒：在名牌上显示已用时
-    if (thinking.seat >= 0) {
+    if (thinking.seat >= 0 && thinking.seat !== self) {
       const sec = Math.floor((performance.now() - thinking.since) / 1000);
       if (sec >= 2 && sec !== thinking.shown) { thinking.shown = sec; huds[thinking.seat].act.textContent = `思考中 ${sec}s`; }
     }
@@ -1000,8 +1007,13 @@ export function createTable({ scene, seats, brands, onSeatClick, onAction, sfx }
 
   const status = (i) => {
     const p = cur?.players[i];
-    return { active: cur?.toAct === i, folded: !!p?.folded, winner: !!p?.winner, out: !!p && isOut(cur, p) };
+    return { active: cur?.toAct === i, folded: !!p?.folded, winner: !!p?.winner, out: !!p && isOut(cur, p), sittingOut: !!p?.sittingOut };
   };
+  // 第一人称镜头下玩家自己的名牌挡视线，由操作栏代替
+  function setHudHidden(i, v) {
+    huds[i].hidden = v;
+    huds[i].obj.visible = !v && !cur?.players[i]?.sittingOut;
+  }
 
-  return { render, update, setRevealAll, status, get state() { return cur; } };
+  return { render, update, setRevealAll, status, setHudHidden, setSelf(i) { self = i; }, get state() { return cur; } };
 }

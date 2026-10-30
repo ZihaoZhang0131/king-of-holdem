@@ -1,7 +1,7 @@
 import http from 'node:http';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createTournament } from '../game/engine.js';
+import { createTournament, viewFor } from '../game/engine.js';
 import { createAgent, extractJSON, validate } from './agent.js';
 import { chatComplete } from './llm.js';
 import { sanitizeConfig, formatConfig } from './config.js';
@@ -15,11 +15,14 @@ import { sanitizeConfig, formatConfig } from './config.js';
 
 const base = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), 'utf8'));
 const config = { ...base, pace: Object.fromEntries(Object.keys(base.pace).map((k) => [k, 0])) };
-const allSeats = base.players.map((p) => ({ name: p.name }));
+// 6 个 AI 座位 + 玩家座位（6 号）
+const allSeats = [...base.players.map((p) => ({ name: p.name })), { name: '你' }];
+const HUMAN = allSeats.length - 1;
+const aiOnly = allSeats.map((_, i) => i !== HUMAN);
 
 // ---------- 1. engine ----------
 // mask：每个座位是否参赛（不参赛的座位开局即出局、没有名次）
-async function engineTest(runs, mask = allSeats.map(() => true), modes = {}) {
+async function engineTest(runs, mask = aiOnly, modes = {}) {
   const seats = allSeats.map((s, i) => ({ ...s, enabled: mask[i] }));
   const cfg = { ...config, modes };
   const seen = new Set();
@@ -37,6 +40,16 @@ async function engineTest(runs, mask = allSeats.map(() => true), modes = {}) {
         assert.equal(sum, TOTAL, `筹码不守恒：hand ${st.handId} 合计 ${sum}`);
         st.players.forEach((p) => assert.ok(p.stack >= 0 && p.bet >= 0));
         (st.events || []).forEach((e) => seen.add(e.type));
+        // 玩家视角：别人没亮的底牌是牌背，本手结束前看不到 AI 独白；自己的牌原样
+        if (mask[HUMAN]) {
+          const v = viewFor(st, HUMAN);
+          const over = st.players.some((p) => p.winner) || st.tournament.finished;
+          v.players.forEach((p, i) => {
+            if (i === HUMAN) return assert.deepEqual(p.cards, st.players[i].cards);
+            if (p.cards && !p.revealed) assert.deepEqual(p.cards, ['?', '?'], `玩家视角泄露了 ${p.name} 的底牌`);
+            if (!over) assert.equal(p.thought, '', '本手结束前泄露了 AI 独白');
+          });
+        }
         if (st.modes?.squid?.active) st.players.forEach((p, i) => assert.ok(mask[i] || !p.squids));
         hands = Math.max(hands, st.handId);
         latest = st;
@@ -101,7 +114,15 @@ function configTest() {
   bad({ blinds: [] }, '级别');
   bad({ startingStack: 150, blinds: [[50, 100]] }, '2 个大盲');
   bad({ players: base.players.map((p, i) => ({ ...p, enabled: i === 0 })) }, '至少需要 2 位');
-  console.log('✓ 设置：范围夹取、盲注递增、参赛人数、选手名锁定、玩法参数、落盘格式');
+  // 玩家模式：真人算一位，至少 1 个 AI；玩家名不能和 AI 重名；思考时限 0 = 不限，否则至少 5 秒
+  const solo = base.players.map((p, i) => ({ ...p, enabled: i === 0 }));
+  const pm = ok({ ...base, mode: 'play', players: solo, human: { name: '  小明  ' }, humanTimeoutMs: 1200 });
+  assert.deepEqual([pm.mode, pm.human.name, pm.humanTimeoutMs], ['play', '小明', 5000]);
+  assert.equal(ok({ ...base, mode: 'play', human: { name: 'Claude' } }).human.name, '你');
+  assert.equal(ok({ ...base, mode: 'bogus', humanTimeoutMs: -3 }).mode, base.mode);
+  assert.equal(ok({ ...base, humanTimeoutMs: 0 }).humanTimeoutMs, 0);
+  bad({ mode: 'play', players: base.players.map((p) => ({ ...p, enabled: false })) }, '至少需要 1 位 AI');
+  console.log('✓ 设置：范围夹取、盲注递增、参赛人数、选手名锁定、玩法参数、玩家模式、落盘格式');
 }
 
 // ---------- 2. protocol ----------
@@ -180,15 +201,19 @@ async function gatewayTest() {
 }
 
 await engineTest(Number(process.argv[2] || 30));
-await engineTest(10, [true, false, true, true, false, true]);
-await engineTest(10, [false, false, false, true, true, false]);
+await engineTest(10, [true, false, true, true, false, true, false]);
+await engineTest(10, [false, false, false, true, true, false, false]);
+// 玩家模式：7 人满桌、玩家 + 1 位 AI 单挑、玩家 + 3 位 AI
+await engineTest(15, allSeats.map(() => true));
+await engineTest(10, [true, false, false, false, false, false, true]);
+await engineTest(10, [true, true, true, false, false, false, true], { squid: { enabled: true }, royale: { enabled: true } });
 {
   const sq = await engineTest(20, undefined, { squid: { enabled: true } });
   assert.ok(sq.has('squid') && sq.has('squidSettle'), '鱿鱼游戏没有发生结算');
   const br = await engineTest(20, undefined, { royale: { enabled: true } });
   for (const e of ['zone', 'airdrop', 'kill', 'final']) assert.ok(br.has(e), `大逃杀缺少事件 ${e}`);
   await engineTest(20, undefined, { squid: { enabled: true }, royale: { enabled: true } });
-  await engineTest(10, [true, false, true, true, false, true], { squid: { enabled: true, unitBB: 20 }, royale: { enabled: true, zoneEvery: 2, anteStep: 1, bountyPct: 0.5 } });
+  await engineTest(10, [true, false, true, true, false, true, false], { squid: { enabled: true, unitBB: 20 }, royale: { enabled: true, zoneEvery: 2, anteStep: 1, bountyPct: 0.5 } });
 }
 configTest();
 protocolTest();

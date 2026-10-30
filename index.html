@@ -91,7 +91,8 @@
   button.ghost { width: 100%; justify-content: center; margin-top: 10px; font-size: 12px; color: #a99fd0; background: transparent; }
 
   /* ---------- 筹码排行 ---------- */
-  #lb-rows { --rh: 52px; position: relative; height: calc(var(--rh) * 6 - 6px); }
+  #lb-rows { --rh: 52px; position: relative; height: calc(var(--rh) * var(--n, 6) - 6px); }
+  .lb-row[hidden] { display: none; }
   .lb-row { --c: #888; position: absolute; left: 0; right: 0; top: calc(var(--i, 0) * var(--rh)); height: calc(var(--rh) - 6px);
     box-sizing: border-box; display: flex; align-items: center; gap: 10px; padding: 0 10px 0 8px; cursor: pointer;
     border-radius: 12px; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.06); border-left: 3px solid var(--c);
@@ -138,6 +139,12 @@
   #win-match { --w: 340px; }
   #win-match .win-body { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
   .mp-ctrl { padding: 0 14px 12px; }
+  .mp-mode { margin-bottom: 10px; }
+  .stepper { display: inline-flex; align-items: center; gap: 4px; }
+  .stepper button { width: 28px; height: 28px; padding: 0; justify-content: center; font-size: 15px; border-radius: 8px; }
+  .stepper button:disabled { opacity: .35; cursor: default; }
+  .stepper b { min-width: 26px; text-align: center; font: 800 15px/1 "Helvetica Neue", Arial, sans-serif; color: #ffe2a0; }
+  .seat.me .seat-head { cursor: default; }
   .mp-status { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-height: 22px; }
   .mp-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 999px; font-size: 12px;
     background: rgba(255,255,255,.08); color: #cfc8ee; white-space: nowrap; }
@@ -419,6 +426,55 @@
   .bs-stage b { font-size: 18px; color: #f2cf86; }
   .bs-pot b { font: 800 20px/1 "Helvetica Neue", Arial, sans-serif; color: #ffe8b0; font-variant-numeric: tabular-nums; }
 
+  /* ---------- 玩家模式：操作栏（屏幕底部），公共牌条让到它上面 ---------- */
+  body.play #board-strip { bottom: 118px; }
+  #action-bar { position: absolute; left: calc(50% + var(--side, 0px) / 2); bottom: 16px; transform: translateX(-50%); z-index: 12;
+    display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-radius: 18px; max-width: calc(100vw - 32px); box-sizing: border-box;
+    background: linear-gradient(160deg, rgba(48,34,10,.95), rgba(14,10,24,.96)); border: 1px solid rgba(255,194,74,.45);
+    box-shadow: 0 16px 50px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.08); transition: border-color .2s, box-shadow .2s; }
+  #action-bar[hidden] { display: none; }
+  #action-bar.turn { border-color: #ffc24a; box-shadow: 0 0 0 1px #ffc24a, 0 0 36px rgba(255,194,74,.45), 0 16px 50px rgba(0,0,0,.55); }
+  #action-bar.busy { opacity: .7; pointer-events: none; }
+  .ab-me { display: flex; align-items: center; gap: 10px; flex: none; }
+  .ab-cards { display: flex; gap: 5px; }
+  .ab-cards .pc { --w: 44px; }
+  #action-bar.folded .ab-cards { filter: grayscale(1); opacity: .5; }
+  .ab-info { display: flex; flex-direction: column; gap: 3px; min-width: 96px; }
+  .ab-info b { font-size: 14px; color: #ffd98a; white-space: nowrap; }
+  .ab-info small { font-size: 11.5px; color: #cfc6e8; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ab-wait { font-size: 13px; color: #b9b3d8; white-space: nowrap; padding-right: 4px; }
+  .ab-wait:empty, .ab-wait[hidden] { display: none; }
+  .ab-acts { display: flex; align-items: center; gap: 12px; position: relative; }
+  .ab-acts[hidden] { display: none; }
+  .ab-raise { display: flex; flex-direction: column; gap: 6px; }
+  .ab-raise[hidden] { display: none; }
+  .ab-presets { display: flex; gap: 4px; }
+  .ab-presets button { flex: 1; justify-content: center; padding: 3px 0; font-size: 11.5px; border-radius: 7px; }
+  .ab-size { display: flex; align-items: center; gap: 6px; }
+  .ab-slider { width: 150px; accent-color: #ffc24a; }
+  .ab-amt { width: 76px; font: inherit; font-size: 13px; text-align: right; color: #fff; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.15);
+    border-radius: 8px; padding: 5px 7px; outline: none; font-variant-numeric: tabular-nums; -moz-appearance: textfield; appearance: textfield; }
+  .ab-amt:focus { border-color: #ffc24a; }
+  .ab-amt::-webkit-inner-spin-button, .ab-amt::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .ab-btns { display: flex; gap: 8px; }
+  .ab-btns button { min-width: 92px; justify-content: center; padding: 11px 14px; font-size: 14px; font-weight: 700; border-radius: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ab-btns button[hidden] { display: none; }
+  .ab-btns kbd { font: 600 10px/1 "Helvetica Neue", Arial, sans-serif; padding: 2px 4px; border-radius: 4px; background: rgba(255,255,255,.14); color: rgba(255,255,255,.7); }
+  .ab-fold { background: rgba(154,160,180,.16); }
+  .ab-call { background: linear-gradient(135deg, rgba(79,179,255,.45), rgba(40,90,180,.4)); border-color: rgba(79,179,255,.6); }
+  .ab-go { background: linear-gradient(135deg, #ffb347, #e0702f); color: #2a1200; border-color: transparent; }
+  .ab-go kbd { background: rgba(0,0,0,.18); color: rgba(42,18,0,.75); }
+  .ab-go.allin { background: linear-gradient(135deg, #ff5a6e, #c8203c); color: #fff; }
+  .ab-go.allin kbd { color: rgba(255,255,255,.8); }
+  .ab-btns button:hover { filter: brightness(1.12); }
+  .ab-err { position: absolute; left: 0; right: 0; bottom: calc(100% + 18px); text-align: center; font-size: 12px; color: #ff9aa8; }
+  .ab-err:empty { display: none; }
+  .ab-timer { position: absolute; left: 14px; right: 14px; bottom: 4px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.08); overflow: hidden; }
+  .ab-timer[hidden] { display: none; }
+  .ab-timer i { display: block; height: 100%; background: #ffc24a; border-radius: 2px; }
+  .ab-timer.hurry i { background: #ff4d6d; }
+  .ab-timer[data-paused="1"] i { opacity: .4; }
+
   @media (max-width: 1100px) {
     #banner { top: auto; bottom: 152px; }
     .hud-thought { max-width: 124px; }
@@ -436,6 +492,13 @@
     #fx-flash span { font-size: 28px; } #fx-flash b { font-size: 16px; } #fx-flash em { font-size: 18px; }
     .bs-cards .pc { --w: 34px; }
     .bs-stage, .bs-pot { min-width: 0; }
+    body.play #board-strip { bottom: 172px; }
+    #action-bar { flex-wrap: wrap; justify-content: center; gap: 8px; padding: 8px 10px; bottom: 10px; width: calc(100vw - 20px); }
+    .ab-cards .pc { --w: 32px; }
+    .ab-acts { flex-wrap: wrap; justify-content: center; gap: 8px; }
+    .ab-btns button { min-width: 0; padding: 9px 10px; font-size: 13px; }
+    .ab-btns kbd { display: none; }
+    .ab-slider { width: 120px; }
   }
 </style>
 <script type="importmap">
@@ -486,6 +549,7 @@
   <div id="table-msg" style="display:none"></div>
 </div>
 <div id="board-strip"></div>
+<div id="action-bar" hidden></div>
 <div id="fx-flash"></div>
 <script type="module" src="./main.js"></script>
 </body>

@@ -1,7 +1,7 @@
 import { resolveModes } from './game/modes.js';
 
 /**
- * 「对局设置」浮窗：上半部分是比赛控制（开始 / 暂停 / 重开 / 速度），常驻可见；
+ * 「对局设置」浮窗：上半部分是比赛控制（观战 / 玩家模式、开始 / 暂停 / 重开 / 速度），常驻可见；
  * 下半部分是四个设置页签 —— 选手、赛制、筹码、玩法（鱿鱼游戏 / 大逃杀），编辑的是一份草稿，点「保存设置」才写回服务端 config.json。
  * 比赛进行中保存的设置不影响当前对局，重开后生效；未开赛时保存立即生效。
  */
@@ -42,14 +42,19 @@ function nextLevel([, bb]) {
  * @param {HTMLElement} o.summary   标题栏缩小时的一句话
  * @param {HTMLElement} o.mini      标题栏上的迷你开始/暂停按钮
  * @param {Array} o.brands
- * @param {boolean} o.live          是否连着本地对局服务（否则为演示模式，只有控制没有设置）
+ * @param {boolean} o.live          是否连着本地对局服务（否则为演示模式，只有控制、模式与 AI 数量）
+ * @param {{play:boolean, ais:number}} [o.demoOpts]  演示模式的设置
+ * @param {(o:object) => void} [o.onDemoOpts]      演示模式改设置（存进浏览器并刷新页面）
  * @param {() => void} o.onPrimary  开始 / 暂停 / 继续
  * @param {() => void} o.onRestart
  * @param {(v:number) => void} o.onSpeed
  */
-export function createMatchPanel({ root, summary, mini, brands, live, onPrimary, onRestart, onSpeed }) {
+export function createMatchPanel({ root, summary, mini, brands, live, demoOpts, onDemoOpts, onPrimary, onRestart, onSpeed }) {
+  const HUMAN = brands.findIndex((b) => b.human);
+  const AIS = HUMAN; // 座位 0 … HUMAN-1 是 AI
   root.innerHTML = `
     <div class="mp-ctrl">
+      <div class="seg wide mp-mode" role="group" aria-label="模式"><button data-mode="watch">◎ 观战</button><button data-mode="play">♛ 玩家模式</button></div>
       <div class="mp-status"><span class="mp-pill" data-s="idle"><i></i><b>未开始</b></span><span class="mp-info"></span></div>
       <button class="mp-primary" data-act="primary"></button>
       <div class="mp-row">
@@ -87,6 +92,7 @@ export function createMatchPanel({ root, summary, mini, brands, live, onPrimary,
     pb.classList.toggle('go', state !== 'running');
     $('.mp-restart').hidden = !live || (!s.running && !s.finished);
     root.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', Number(b.dataset.speed) === s.speed));
+    paintMode();
     mini.innerHTML = state === 'running'
       ? '<svg viewBox="0 0 10 10"><rect x="1" y="1" width="3" height="8" rx=".6"/><rect x="6" y="1" width="3" height="8" rx=".6"/></svg>'
       : '<svg viewBox="0 0 10 10"><path d="M2 1.2v7.6a.5.5 0 0 0 .76.43l6.2-3.8a.5.5 0 0 0 0-.86l-6.2-3.8A.5.5 0 0 0 2 1.2z"/></svg>';
@@ -99,12 +105,32 @@ export function createMatchPanel({ root, summary, mini, brands, live, onPrimary,
   root.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b || !root.contains(b)) return;
-    if (b.dataset.act === 'primary') onPrimary();
+    if (b.dataset.mode) setMode(b.dataset.mode);
+    else if (b.dataset.act === 'primary') onPrimary();
     else if (b.dataset.act === 'restart') onRestart();
     else if (b.dataset.speed) onSpeed(Number(b.dataset.speed));
     else if (b.dataset.tab) { tab = b.dataset.tab; root.querySelectorAll('[data-tab]').forEach((t) => t.classList.toggle('on', t === b)); paintPage(); }
   });
   mini.addEventListener('click', (e) => { e.stopPropagation(); onPrimary(); });
+
+  // ---------- 模式与 AI 数量 ----------
+  // 实时模式改的是草稿（保存后生效，进行中则重开后生效）；演示模式直接生效
+  const modeOf = () => (live ? draft?.mode || 'watch' : demoOpts?.play ? 'play' : 'watch');
+  function paintMode() {
+    root.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', b.dataset.mode === modeOf()); b.disabled = live && !draft; });
+  }
+  function setMode(m) {
+    if (!live) { if ((m === 'play') !== !!demoOpts.play) onDemoOpts({ play: m === 'play' }); return; }
+    if (!draft || draft.mode === m) return;
+    draft.mode = m;
+    // 玩家模式至少要 1 位 AI，观战至少 2 位
+    if (m === 'watch' && aiCount() < 2) setAiCount(2);
+    paintPage();
+    paintMode();
+  }
+  const aiCount = () => draft.players.filter((p) => p.enabled !== false).length;
+  function setAiCount(n) { draft.players.forEach((p, i) => { p.enabled = i < n; }); }
+  const stepper = (n, lo, hi) => `<span class="stepper"><button data-ais="${n - 1}" ${n <= lo ? 'disabled' : ''}>−</button><b>${n}</b><button data-ais="${n + 1}" ${n >= hi ? 'disabled' : ''}>＋</button></span>`;
 
   // ---------- 设置草稿 ----------
   const dirty = () => saved && norm(draft) !== norm(saved);
@@ -165,9 +191,19 @@ export function createMatchPanel({ root, summary, mini, brands, live, onPrimary,
 
   function playersPage() {
     const g = gateway?.configured ? `<b class="ok">●</b> 网关 ${esc(gateway.host)}` : '<b class="warn">●</b> 未配置网关（.env），选「大模型」的座位也会由模拟 AI 代打';
-    const entrants = draft.players.filter((p) => p.enabled !== false).length;
+    const n = aiCount(), play = draft.mode === 'play';
+    const hc = brands[HUMAN] ? hex(brands[HUMAN].color) : '#ffc24a';
     return `
-      <p class="mp-note">${g}<br>参赛 ${entrants} / ${draft.players.length} 人 · 选手与 3D 角色一一对应，名字不可改</p>
+      <p class="mp-note">${g}<br>${play ? `你 + ${n} 位 AI，共 ${n + 1} 人` : `参赛 ${n} / ${AIS} 人`} · AI 选手与 3D 角色一一对应，名字不可改</p>
+      ${field('AI 选手数量', stepper(n, play ? 1 : 2, AIS), '按座位顺序启用前几位，也可以在下面逐个开关')}
+      ${play ? `
+        <div class="seat open me" style="--c:${hc}">
+          <div class="seat-head"><span class="dot"></span><b>${esc(draft.human?.name || '你')}</b><span class="seat-sub">真人玩家 · 近侧座位</span></div>
+          <div class="seat-body">
+            ${field('名字', `<input type="text" maxlength="12" data-k="human.name" value="${esc(draft.human?.name || '你')}" placeholder="你">`)}
+            ${field('思考时限', numIn('humanTimeoutMs', draft.humanTimeoutMs || 0, { min: 0, max: 600, unit: '秒', scale: 1000 }), '0 = 不限时；超时自动过牌/弃牌')}
+          </div>
+        </div>` : ''}
       <div class="mp-bulk"><input type="text" placeholder="把所有座位的模型设为…" data-bulk><button data-bulk-apply>应用</button></div>
       ${draft.players.map((p, i) => {
         const on = p.enabled !== false, mock = !!p.mock;
@@ -254,7 +290,9 @@ export function createMatchPanel({ root, summary, mini, brands, live, onPrimary,
 
   function paintPage() {
     if (!live) {
-      page.innerHTML = '<p class="mp-note">当前为本地演示模式（模拟 AI，已开启鱿鱼游戏 + 大逃杀）。<br>在项目目录运行 <code>npm start</code> 并打开 <code>localhost:8787</code>，即可配置选手、赛制、筹码与玩法，由大模型真实对战。</p>';
+      const n = demoOpts.ais;
+      page.innerHTML = `<p class="mp-note">当前为本地演示模式（模拟 AI，已开启鱿鱼游戏 + 大逃杀）。${demoOpts.play ? '<br>你坐在近侧的座位上，轮到你时屏幕底部会出现操作栏。' : ''}<br>在项目目录运行 <code>npm start</code> 并打开 <code>localhost:8787</code>，即可配置选手、赛制、筹码与玩法，由大模型真实对战。</p>
+        ${field('AI 选手数量', stepper(n, demoOpts.play ? 1 : 2, AIS), '改动后页面会刷新、重新开局')}`;
       $('.mp-tabs').hidden = true;
       paintFoot();
       return;
@@ -264,6 +302,7 @@ export function createMatchPanel({ root, summary, mini, brands, live, onPrimary,
     page.innerHTML = { players: playersPage, rules: rulesPage, chips: chipsPage, modes: modesPage }[tab]();
     $('.mp-scroll').scrollTop = y;
     paintFoot();
+    paintMode();
   }
 
   // 输入：直接改草稿，不整页重绘（保持焦点）；结构性变化才重绘
@@ -285,6 +324,7 @@ export function createMatchPanel({ root, summary, mini, brands, live, onPrimary,
         const m = k.match(/^players\.(\d+)\.(style|model)$/);
         if (m?.[2] === 'style') page.querySelector(`[data-count="${m[1]}"]`).textContent = el.value.length;
         if (m?.[2] === 'model') page.querySelector(`[data-seat="${m[1]}"] .seat-sub`).textContent = el.value || '未填模型 · 模拟 AI';
+        if (k === 'human.name') page.querySelector('.seat.me .seat-head b').textContent = el.value || '你';
       }
     } else if (el.dataset.blind) {
       if (el.value === '') return;
@@ -299,6 +339,13 @@ export function createMatchPanel({ root, summary, mini, brands, live, onPrimary,
   page.addEventListener('click', (e) => {
     const b = e.target.closest('button, .seat-head');
     if (!b || e.target.closest('.sw')) return;
+    if (b.dataset.ais) {
+      if (!live) return onDemoOpts({ ais: Number(b.dataset.ais) });
+      setAiCount(Number(b.dataset.ais));
+      paintPage();
+      return;
+    }
+    if (b.classList.contains('seat-head') && !b.dataset.seat) return;
     const seg = b.parentElement?.dataset;
     if (b.classList.contains('seat-head')) {
       const i = Number(b.dataset.seat);

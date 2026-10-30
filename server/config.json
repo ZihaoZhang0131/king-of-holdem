@@ -20,6 +20,11 @@
   "maxHands": 400,
   "recentHands": 5,
   "decisionTimeoutMs": 45000,
+  "mode": "watch",
+  "human": {
+    "name": "你"
+  },
+  "humanTimeoutMs": 0,
   "pace": {
     "deal": 1800,
     "action": 900,

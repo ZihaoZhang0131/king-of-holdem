@@ -390,9 +390,10 @@ function buildRibbon(brands, A, B) {
     x.fillStyle = '#d8b36a';
     x.fillRect(0, 6, W, 3);
     x.fillRect(0, TH - 9, W, 3);
-    const players = st?.players || brands.map(() => ({ stack: 1000, bet: 0 }));
+    const players = st?.players || brands.map((b) => ({ stack: 1000, bet: 0, sittingOut: !!b.human }));
     const totals = players.map((p) => p.stack + p.bet);
     const max = Math.max(1, ...totals);
+    const shown = players.map((_, i) => i).filter((i) => !players[i].sittingOut); // 不参赛的座位不上屏
     const half = W / 2;
     for (let h = 0; h < 2; h++) {
       const ox = h * half;
@@ -406,9 +407,10 @@ function buildRibbon(brands, A, B) {
       x.fillStyle = '#c9c3e6';
       x.font = '600 36px "Helvetica Neue", Arial, sans-serif';
       x.fillText(`LIVE  #${st?.handId ?? 0}`, ox + 84, 170);
-      const cellW = (half - 420) / 6;
-      players.forEach((p, i) => {
-        const cx = ox + 400 + i * cellW;
+      const cellW = (half - 420) / Math.max(6, shown.length);
+      shown.forEach((i, k) => {
+        const p = players[i];
+        const cx = ox + 400 + k * cellW;
         const color = hex(brands[i].color);
         const dim = p.folded ? 0.4 : 1;
         if (st?.toAct === i || p.winner) {

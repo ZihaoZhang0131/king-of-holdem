@@ -14,6 +14,29 @@ import { createLeaderboard } from './leaderboard.js';
 import { createWindow, resetWindows } from './windows.js';
 import { createMatchPanel } from './match-panel.js';
 import { createSfx } from './sfx.js';
+import { createActionBar } from './action-bar.js';
+
+// ---------- match source ----------
+// 由本地 Node 对局服务驱动（真实模型）；直接用静态服务器打开时退回本地演示
+let speed = 1;
+let live = null;
+try {
+  const r = await fetch('/api/status', { cache: 'no-store' });
+  if (r.ok) live = await r.json();
+} catch { /* 静态服务器：没有 API */ }
+const isLive = !!live;
+const $ = (id) => document.getElementById(id);
+// 模式：观战（6 个 AI 互打）/ 玩家（你坐在近侧的 7 号位）。演示模式的设置存在浏览器里
+const HUMAN = BRANDS.findIndex((b) => b.human);
+const demoOpts = loadDemoOpts();
+const PLAY = isLive ? !!live.play : demoOpts.play;
+if (isLive && live.players?.[HUMAN]) BRANDS[HUMAN].name = live.players[HUMAN].name;
+function loadDemoOpts() {
+  const o = { play: false, ais: 6 };
+  try { Object.assign(o, JSON.parse(localStorage.getItem('dpzw:demo')) || {}); } catch { /* 无存储 */ }
+  o.ais = Math.min(6, Math.max(o.play ? 1 : 2, Math.round(Number(o.ais)) || 6));
+  return o;
+}
 
 // ---------- renderer / scene ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -35,7 +58,7 @@ scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 300);
 const VIEWS = {
-  // 荷官视角：站在发牌位（靠镜头一侧的长边中央）看向扇形排开的六位选手
+  // 荷官视角：站在发牌位（靠镜头一侧的长边中央）看向扇形排开的六位选手；玩家模式下就是坐在这里的「你」的视角
   dealer: { pos: new THREE.Vector3(0, 15, 14), target: new THREE.Vector3(0, 1.4, -2) },
   home: { pos: new THREE.Vector3(0, 8.0, 11.8), target: new THREE.Vector3(0, 1.1, 0) },
   top: { pos: new THREE.Vector3(0, 13.2, 0.5), target: new THREE.Vector3(0, 1, 0) },
@@ -102,8 +125,9 @@ const fanAngle = (i) => {
   const t = (-qb + Math.sqrt(qb * qb - 4 * qa * qc)) / (2 * qa);
   return Math.atan2((FAN.z + dz * t) / SEAT.b, (dx * t) / SEAT.a);
 };
+// 玩家座位在近侧长边中央（荷官的位置），顺时针排在 5 号与 0 号之间
 const seats = BRANDS.map((b, i) => {
-  const angle = fanAngle(i);
+  const angle = b.human ? Math.PI / 2 : fanAngle(i);
   const slot = new THREE.Group();
   slot.position.set(SEAT.a * Math.cos(angle), 0, SEAT.b * Math.sin(angle));
   scene.add(slot);
@@ -123,12 +147,21 @@ const seats = BRANDS.map((b, i) => {
   float.add(pivot);
   const mascot = b.build();
   pivot.add(mascot.group);
-  return { angle, slot, ring, pivot, mascot, float, chip, glow, beam, mats, top: height, yaw: pivot.rotation.y, baseY: height, hl: 0, gold: 0, react: null };
+  return { angle, human: !!b.human, slot, ring, pivot, mascot, float, chip, glow, beam, mats, top: height, yaw: pivot.rotation.y, baseY: height, hl: 0, gold: 0, react: null };
 });
+
+// 不参赛的座位整个隐藏（吉祥物、筹码座、名牌）；开赛前按设置猜一次，之后以 state 里的 sittingOut 为准
+const seatOut = BRANDS.map((b, i) => (b.human ? !PLAY : isLive ? live.players?.[i]?.enabled === false : i >= demoOpts.ais));
+function syncSeats(st) {
+  const out = st.players.map((p) => !!p.sittingOut);
+  if (out.join() === seatOut.join()) return;
+  out.forEach((v, i) => { seatOut[i] = v; });
+  focusBtns.forEach((b, i) => { b.hidden = seatOut[i]; });
+}
 
 // 行动时角色的小动作：过牌点两下、跟注点一下、下注/加注跳起、全下跳起转一圈、弃牌摇头
 const sfx = createSfx();
-const table = createTable({ scene, seats, brands: BRANDS, sfx, onSeatClick: (i) => focusOn(i), onAction: (i, type) => { seats[i].react = { type, t0: t }; } });
+const table = createTable({ scene, seats, brands: BRANDS, sfx, play: PLAY, onSeatClick: (i) => focusOn(i), onAction: (i, type) => { seats[i].react = { type, t0: t }; } });
 const REACT = {
   check: (u) => ({ dur: 0.5, jump: Math.abs(Math.sin((u / 0.5) * Math.PI * 2)) * 0.12 }),
   call: (u) => ({ dur: 0.4, jump: Math.sin((u / 0.4) * Math.PI) * 0.16 }),
@@ -196,16 +229,6 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
-// ---------- match source ----------
-// 由本地 Node 对局服务驱动（真实模型）；直接用静态服务器打开时退回本地演示
-let speed = 1;
-let live = null;
-try {
-  const r = await fetch('/api/status', { cache: 'no-store' });
-  if (r.ok) live = await r.json();
-} catch { /* 静态服务器：没有 API */ }
-const isLive = !!live;
-const $ = (id) => document.getElementById(id);
 
 // ---------- floating windows ----------
 // 默认布局：左上排行、左下视角、右上对局；窄屏或矮屏时视角/对局先缩小
@@ -221,6 +244,8 @@ const renderTable = table.render;
 table.render = (st) => {
   renderTable(st);
   leaderboard.update(st);
+  actionBar?.update(st);
+  syncSeats(st);
   $('lb-sum').textContent = leaderboard.leader(st);
   const tn = st.tournament;
   matchPanel.setInfo(st.handId ? [`第 ${st.handId} 手`, tn ? `Lv${tn.level} ${st.blinds.join('/')}` : `盲注 ${st.blinds.join('/')}`, tn ? `剩 ${tn.playersLeft} 人` : STAGE_CN[st.stage]].filter(Boolean).join(' · ') : '');
@@ -232,6 +257,8 @@ table.render = (st) => {
 const api = (cmd, value) => fetch('/api/control', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cmd, value }) })
   .then((r) => r.json()).then(applyStatus);
 function applyStatus(s) {
+  // 观战 / 玩家模式切换要重新布置牌桌（座位、底池位置、镜头），新设置生效时直接刷新页面
+  if (live && !!s.play !== PLAY) { location.reload(); return; }
   live = s;
   speed = s.speed;
   matchPanel.setStatus(s);
@@ -257,11 +284,30 @@ function setSpeed(v) {
   speed = v;
   matchPanel.setStatus({ speed });
 }
+// 演示模式的「观战 / 玩家、AI 数量」设置：存进浏览器后刷新页面
+function setDemoOpts(o) {
+  try { localStorage.setItem('dpzw:demo', JSON.stringify({ ...demoOpts, ...o })); } catch { /* 无存储 */ }
+  location.reload();
+}
 const matchPanel = createMatchPanel({
   root: $('match-body'), summary: $('match-sum'), mini: $('match-mini'), brands: BRANDS, live: isLive,
+  demoOpts, onDemoOpts: setDemoOpts,
   onPrimary: toggleMatch, onRestart: restartMatch, onSpeed: setSpeed,
 });
-const demo = isLive ? null : createDemo({ names: BRANDS.map((b) => b.name), render: table.render, speed: () => speed });
+// 玩家模式：轮到你时在公共牌条上方弹出操作栏；实时模式提交给服务端，演示模式交给本地 demo
+const actionBar = PLAY ? createActionBar({
+  root: $('action-bar'), seat: HUMAN, sfx,
+  onAct: (a) => (isLive
+    ? fetch('/api/act', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(a) }).then((r) => r.json())
+    : demo.act(a)),
+}) : null;
+document.body.classList.toggle('play', PLAY);
+table.setSelf(PLAY ? HUMAN : -1);
+const demo = isLive ? null : createDemo({
+  names: BRANDS.map((b) => b.name), render: table.render, speed: () => speed,
+  seats: BRANDS.map((b, i) => (b.human ? PLAY : i < demoOpts.ais)), human: PLAY ? HUMAN : -1,
+  onTurn: (turn) => actionBar?.setTurn(turn),
+});
 // 对外暴露，便于调试
 window.pokerTable = table;
 window.pokerDemo = demo;
@@ -276,6 +322,7 @@ if (isLive) {
   const es = new EventSource('/events');
   es.addEventListener('state', (e) => table.render(JSON.parse(e.data)));
   es.addEventListener('status', (e) => applyStatus(JSON.parse(e.data)));
+  es.addEventListener('turn', (e) => actionBar?.setTurn(JSON.parse(e.data)));
 } else {
   document.querySelector('.live').lastChild.textContent = 'DEMO';
 }
@@ -288,12 +335,15 @@ try { Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY)) || {}); } 
 const savePrefs = () => { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* 无存储 */ } };
 
 let fly = null, camMode = 'dealer', focused = -1;
+const DEALER_NAME = PLAY ? '玩家' : '荷官';
+$('cam-seg').querySelector('[data-view="dealer"]').textContent = DEALER_NAME;
 const focusBtns = BRANDS.map((b, i) => {
   const btn = document.createElement('button');
   btn.style.setProperty('--c', '#' + b.color.toString(16).padStart(6, '0'));
   btn.innerHTML = `<span class="dot"></span>${b.name}`;
   btn.title = `快捷键 ${i + 1}`;
   btn.addEventListener('click', () => focusOn(i));
+  btn.hidden = seatOut[i];
   $('focus-grid').appendChild(btn);
   return btn;
 });
@@ -301,12 +351,13 @@ function paintView() {
   document.querySelectorAll('#cam-seg [data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === camMode));
   focusBtns.forEach((b, i) => b.classList.toggle('on', camMode === 'focus' && focused === i));
   leaderboard.setFocused(camMode === 'focus' ? focused : -1);
-  const name = { dealer: '荷官', home: '总览', top: '俯视', orbit: '环绕', free: '自由视角', focus: `聚焦 ${BRANDS[focused]?.name}` }[camMode];
+  const name = { dealer: DEALER_NAME, home: '总览', top: '俯视', orbit: '环绕', free: '自由视角', focus: `聚焦 ${BRANDS[focused]?.name}` }[camMode];
   $('view-sum').textContent = prefs.follow ? `${name} · 跟随` : name;
 }
 function setAuto(v) { controls.autoRotate = v; }
 function focusOn(i) {
   const s = seats[i];
+  if (!s.slot.visible && !(PLAY && i === HUMAN)) return;
   const p = s.pivot.getWorldPosition(new THREE.Vector3());
   const inward = p.clone().setY(0).normalize().negate();
   fly = { target: p.clone().add(new THREE.Vector3(0, 1.4, 0)), pos: p.clone().addScaledVector(inward, 3.9).add(new THREE.Vector3(0, 2.0, 0)) };
@@ -339,19 +390,22 @@ function director(st) {
   const actor = st.toAct ?? -1;
   if (actor === lastActor) return;
   lastActor = actor;
-  if (actor >= 0) focusOn(actor);
+  if (actor >= 0 && PLAY && actor === HUMAN) { if (camMode !== 'dealer') goView('dealer'); } // 轮到自己：回到玩家视角
+  else if (actor >= 0) focusOn(actor);
   else if (st.players.some((p) => p.winner) && camMode === 'focus') goView('dealer');
 }
 document.querySelectorAll('#cam-seg [data-view]').forEach((b) => b.addEventListener('click', () => goView(b.dataset.view)));
 
 function applyPrefs() {
-  table.setRevealAll(prefs.reveal);
+  // 玩家模式下别人的底牌服务端就没发过来，「显示底牌」只影响自己的牌，固定打开
+  table.setRevealAll(PLAY || prefs.reveal);
   document.body.classList.toggle('no-eq', !prefs.eq);
   document.body.classList.toggle('no-thought', !prefs.thought);
   document.body.classList.toggle('no-board', !prefs.board);
   bloom.enabled = prefs.bloom;
   controls.autoRotateSpeed = prefs.orbit;
   for (const k of ['follow', 'reveal', 'eq', 'thought', 'board', 'bloom']) $(`opt-${k}`).checked = prefs[k];
+  if (PLAY) { $('opt-reveal').checked = false; $('opt-reveal').disabled = true; }
   $('opt-orbit').value = prefs.orbit;
   $('opt-orbit').nextElementSibling.textContent = `${Number(prefs.orbit).toFixed(1)}×`;
   sfx.set({ on: prefs.sound, volume: prefs.volume, ambient: prefs.ambient });
@@ -395,7 +449,7 @@ applyPrefs();
 addEventListener('keydown', (e) => {
   if (e.target.closest?.('input, textarea, select, [contenteditable]')) return; // 在设置里打字时不触发快捷键
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key >= '1' && e.key <= '6') focusOn(+e.key - 1);
+  if (e.key >= '1' && e.key <= String(seats.length)) focusOn(+e.key - 1);
   else if (e.key === '0') goView('dealer');
   else if (e.key === 'h' || e.key === 'H') goView('home');
   else if (e.key === 't' || e.key === 'T') goView('top');
@@ -411,7 +465,7 @@ function pick(e) {
   raycaster.setFromCamera(ndc, camera);
   let o = raycaster.intersectObjects(pickables, true)[0]?.object;
   while (o && o.userData.idx === undefined) o = o.parent;
-  return o ? o.userData.idx : -1;
+  return o && seats[o.userData.idx].slot.visible ? o.userData.idx : -1;
 }
 let down = null;
 renderer.domElement.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
@@ -452,11 +506,19 @@ const dealerFit = { pose: DEALER_POSES[1], k: 1, ox: 0, oy: 0, next: 0, snap: tr
 const view = { ox: 0, oy: 0 };
 const _fitCam = new THREE.PerspectiveCamera();
 const _p = new THREE.Vector3();
-const fitPoints = [
-  ...seats.map((s) => ({ pos: s.slot.position.clone().setY(HUD_Y), hud: true })),
-  ...seats.map((s) => ({ pos: s.slot.position.clone().setY(0.2) })),
-  { pos: new THREE.Vector3(0, FELT.y, FELT.b + 0.5) },
-];
+// 始终框住六个 AI 座位（座位是固定的，只框参赛者会让镜头偏到一边）；
+// 玩家座位不用框：玩家模式下镜头就在它身后，桌子前沿已经包含了自己的底牌
+let fitPoints = [];
+function buildFitPoints() {
+  const framed = seats.filter((s) => !s.human);
+  fitPoints = [
+    ...framed.map((s) => ({ pos: s.slot.position.clone().setY(HUD_Y), hud: true })),
+    ...framed.map((s) => ({ pos: s.slot.position.clone().setY(0.2) })),
+    { pos: new THREE.Vector3(0, FELT.y, FELT.b + 0.5) },
+  ];
+  dealerFit.next = 0;
+}
+buildFitPoints();
 function freeRect(withWins) {
   const W = innerWidth, H = innerHeight, M = 12;
   let top = M, bottom = H - M, l = M, r = W - M;
@@ -489,7 +551,7 @@ function fitBoxes(v, k) {
   });
 }
 const union = (bs) => bs.reduce((u, b) => [Math.min(u[0], b[0]), Math.min(u[1], b[1]), Math.max(u[2], b[2]), Math.max(u[3], b[3])], [Infinity, Infinity, -Infinity, -Infinity]);
-const huddle = (bs) => bs.slice(0, 5).some((a, i) => { const b = bs[i + 1]; return Math.min(a[2], b[2]) > Math.max(a[0], b[0]) && Math.min(a[3], b[3]) > Math.max(a[1], b[1]); });
+const huddle = (bs) => bs.slice(0, fitPoints.filter((p) => p.hud).length - 1).some((a, i) => { const b = bs[i + 1]; return Math.min(a[2], b[2]) > Math.max(a[0], b[0]) && Math.min(a[3], b[3]) > Math.max(a[1], b[1]); });
 function solveFit(pose, withWins) {
   const f = freeRect(withWins);
   const fits = (k) => { const u = union(fitBoxes(pose, k)); return u[2] - u[0] <= f.r - f.l && u[3] - u[1] <= f.bottom - f.top; };
@@ -537,6 +599,11 @@ renderer.setAnimationLoop(() => {
   zone.update(dt, t, table.state?.modes?.royale);
   let litSeat = -1;
   seats.forEach((s, i) => {
+    // 玩家视角下镜头就在自己座位后上方，自己的角色和名牌会挡住牌桌
+    const self = PLAY && i === HUMAN && camMode === 'dealer';
+    s.slot.visible = !seatOut[i] && !self;
+    if (self !== !!s.selfHidden) { s.selfHidden = self; table.setHudHidden(i, self); }
+    if (!s.slot.visible) return;
     s.mascot.update(t);
     const st = table.status(i);
     if (st.active || st.winner) litSeat = i;

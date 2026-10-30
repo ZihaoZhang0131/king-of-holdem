@@ -40,11 +40,14 @@ export function createLeaderboard({ root, handEl, brands, onSelect }) {
     const order = totals.map((_, i) => i).sort((a, b) => key(b) - key(a) || a - b);
     const max = Math.max(1, ...totals);
     if (handEl) handEl.textContent = `第 ${st.handId} 手`;
+    // 不参赛的座位不占行：排在最后并隐藏
+    root.style.setProperty('--n', st.players.filter((p) => !p.sittingOut).length);
     order.forEach((i, r) => {
       const row = rows[i];
       const p = st.players[i];
       const active = st.toAct === i;
       row.el.style.setProperty('--i', r);
+      row.el.hidden = !!p.sittingOut;
       row.el.dataset.rank = r + 1;
       row.rank.textContent = r + 1;
       row.chips.textContent = fmt(totals[i]);

@@ -465,6 +465,77 @@ function buildDeepSeek() {
   };
 }
 
+// ---------- 7. 你 · 小国王（玩家模式的真人座位）----------
+function buildPlayer() {
+  const g = new THREE.Group();
+  const gold = M(0xffc24a, { roughness: 0.25, metalness: 0.6 });
+  const cream = M(0xfff1d6, { roughness: 0.5 });
+  const red = M(0xd8344f, { roughness: 0.4 });
+
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.3, 8, 24), red);
+  body.position.y = 0.66;
+  g.add(body);
+  // 胸前一枚金色筹码
+  const badge = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.05, 32), gold);
+  badge.rotation.x = Math.PI / 2;
+  badge.position.set(0, 0.74, 0.42);
+  g.add(badge);
+  const arms = [-1, 1].map((s) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(s * 0.44, 0.9, 0);
+    const a = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.28, 6, 12), red);
+    a.position.y = -0.2;
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), cream);
+    hand.position.y = -0.42;
+    pivot.add(a, hand);
+    g.add(pivot);
+    return pivot;
+  });
+
+  const head = new THREE.Group();
+  head.position.y = 1.55;
+  g.add(head);
+  head.add(new THREE.Mesh(new THREE.SphereGeometry(0.5, 40, 28), cream));
+  const eyes = [-0.17, 0.17].map((x) => {
+    const e = cartoonEye(0.07);
+    e.position.set(x, 0.06, 0.45);
+    head.add(e);
+    return e;
+  });
+  const m = smile(0.1, 0.02, 0x8a3b2a);
+  m.position.set(0, -0.12, 0.47);
+  head.add(m);
+  [-0.3, 0.3].forEach((x) => { const ch = cheek(0.07); ch.position.set(x, -0.08, 0.4); head.add(ch); });
+
+  // 王冠：一圈金边 + 五个尖角，尖上镶红宝石
+  const crown = new THREE.Group();
+  crown.position.y = 0.42;
+  crown.add(new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.32, 0.14, 32, 1, true), gold));
+  const gem = glow(0xff4060, 1.2);
+  for (let k = 0; k < 5; k++) {
+    const a = (k / 5) * Math.PI * 2;
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 12), gold);
+    spike.position.set(Math.sin(a) * 0.3, 0.17, Math.cos(a) * 0.3);
+    const jewel = noShadow(new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), gem));
+    jewel.position.set(Math.sin(a) * 0.3, 0.3, Math.cos(a) * 0.3);
+    crown.add(spike, jewel);
+  }
+  crown.rotation.z = -0.12;
+  head.add(crown);
+  g.scale.setScalar(1.05);
+  return {
+    group: g,
+    update(t) {
+      head.rotation.y = Math.sin(t * 0.8) * 0.2;
+      head.rotation.z = Math.sin(t * 1.2) * 0.05;
+      crown.position.y = 0.42 + Math.abs(Math.sin(t * 2.4)) * 0.03;
+      arms[0].rotation.z = -0.2 - Math.sin(t * 1.8) * 0.08;
+      arms[1].rotation.z = 0.2 + Math.sin(t * 1.8) * 0.08;
+      eyes.forEach((e) => { e.scale.y = blink(t, 0.7); });
+    },
+  };
+}
+
 export { glow as glowMaterial, noShadow };
 
 // 座位顺序 = 顺时针 = 行动顺序
@@ -475,4 +546,6 @@ export const BRANDS = [
   { id: 'zhipu', name: '智谱', sub: 'GLM', color: 0x3a5cff, build: buildZhipu },
   { id: 'kimi', name: 'Kimi', sub: '月之暗面', color: 0x1783ff, build: buildKimi },
   { id: 'deepseek', name: 'DeepSeek', sub: '深度求索', color: 0x4d6bfe, build: buildDeepSeek },
+  // 玩家座位：近侧长边中央，只在玩家模式下参赛
+  { id: 'you', name: '你', sub: '玩家', color: 0xffc24a, build: buildPlayer, human: true },
 ];

@@ -2,7 +2,7 @@ import { bestHand, handName, newDeck, cmp } from '../poker.js';
 import { resolveModes } from './modes.js';
 
 /**
- * 6 人无限注德州扑克淘汰赛（Freezeout）引擎。
+ * 2–7 人无限注德州扑克淘汰赛（Freezeout）引擎（6 个 AI 座位 + 1 个玩家座位，不参赛的座位 enabled:false）。
  * - 只负责规则与流程：盲注升级、按钮轮转、单挑规则、最小加注、短码全下不重开加注、边池、摊牌、淘汰与名次
  * - 特殊玩法（鱿鱼游戏、大逃杀，规则见 modes.js）也在这里结算；筹码总量始终守恒：
  *   所有人的筹码 + 桌上下注与底池 + 空投箱 + 人头赏金 = 参赛人数 × 起始筹码
@@ -16,6 +16,7 @@ const POSITIONS = {
   4: ['BTN', 'SB', 'BB', 'CO'],
   5: ['BTN', 'SB', 'BB', 'UTG', 'CO'],
   6: ['BTN', 'SB', 'BB', 'UTG', 'HJ', 'CO'],
+  7: ['BTN', 'SB', 'BB', 'UTG', 'MP', 'HJ', 'CO'],
 };
 const STREET_CN = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌' };
 const ACTION_CN = { small_blind: '小盲', big_blind: '大盲', fold: '弃牌', check: '过牌', call: '跟注到', bet: '下注', raise: '加注到', all_in: '全下到' };
@@ -47,12 +48,29 @@ export function modesView(config, { handNo = 0, alive = 0, crate = 0, squidRound
   };
 }
 
+/**
+ * 某个座位能看到的状态（玩家模式下发给浏览器的就是它）：
+ * 别人没亮的底牌换成牌背 '?'；AI 的内心独白常常泄露牌力，本手结束（出现赢家）前不给看
+ */
+export function viewFor(st, seat) {
+  const over = st.players.some((p) => p.winner) || !!st.tournament?.finished;
+  return {
+    ...st,
+    players: st.players.map((p, i) => (i === seat ? p : {
+      ...p,
+      cards: p.cards && !p.revealed ? p.cards.map(() => '?') : p.cards,
+      thought: over ? p.thought : '',
+    })),
+  };
+}
+
 export function createTournament({ seats, config, decide, emit, wait }) {
   const N = seats.length;
   const modes = resolveModes(config.modes);
   const SQ = modes.squid.enabled ? modes.squid : null;
   const BR = modes.royale.enabled ? modes.royale : null;
   const P = initialPlayers(seats, config);
+  const entrants = P.filter((p) => !p.sittingOut).length;
   const history = [];
   let dealer = Math.floor(Math.random() * N);
   let handNo = 0;
@@ -231,8 +249,8 @@ export function createTournament({ seats, config, decide, emit, wait }) {
       return {
         protocol: 'ai-holdem/1',
         tournament: {
-          format: '6-max No-Limit Hold\'em freezeout', hand_no: handNo, level: lv + 1, blinds: { sb: SB, bb: BB },
-          hands_until_blinds_up: config.handsPerLevel - ((handNo - 1) % config.handsPerLevel),
+          format: `${entrants}-max No-Limit Hold'em freezeout`, hand_no: handNo, level: lv + 1, blinds: { sb: SB, bb: BB },
+          hands_until_blinds_up: per - ((handNo - 1) % per),
           next_blinds: config.blinds[Math.min(lv + 1, config.blinds.length - 1)],
           players_left: alive().length, starting_stack: config.startingStack,
         },

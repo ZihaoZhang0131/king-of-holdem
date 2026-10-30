@@ -1,4 +1,7 @@
 import { mockDecide } from '../game/mockbot.js';
+import { validate } from '../game/validate.js';
+
+export { validate };
 
 /**
  * 选手代理：把引擎给的局面（ai-holdem/1 请求）发给模型，解析并校验模型的决策。
@@ -14,8 +17,9 @@ import { mockDecide } from '../game/mockbot.js';
  * 容错：无效输出会带着错误原因重试 1 次；超时不重试；仍失败则系统代为过牌/弃牌。
  */
 
-export const SYSTEM_PROMPT = (name, style, rules = '') => `你是「${name}」，正在参加一场 6 人无限注德州扑克淘汰赛（Freezeout）。
-目标：尽可能赢得筹码、存活到最后、争取冠军。盲注会按手数递增，筹码归零即出局。
+export const SYSTEM_PROMPT = (name, style, rules = '', { players = 6, human = '' } = {}) => `你是「${name}」，正在参加一场 ${players} 人无限注德州扑克淘汰赛（Freezeout）。
+目标：尽可能赢得筹码、存活到最后、争取冠军。盲注会按手数递增，筹码归零即出局。${human ? `
+牌桌上有一位真人玩家「${human}」，其余对手都是 AI。` : ''}
 
 每轮到你行动时，你会收到一个 JSON（协议 ai-holdem/1），字段含义：
 - tournament：赛程信息（当前手数、盲注级别、距下次涨盲还有几手、剩余人数）
@@ -28,7 +32,7 @@ export const SYSTEM_PROMPT = (name, style, rules = '') => `你是「${name}」�
 - modes：特殊玩法的局面（仅在开启鱿鱼游戏/大逃杀时出现）
 
 牌面编码：点数 2-9、T、J、Q、K、A + 花色 s(♠) h(♥) d(♦) c(♣)，例如 "Ah"、"Td"。
-位置：BTN 庄位、SB 小盲、BB 大盲、UTG 枪口、HJ 劫位、CO 关煞；单挑时 BTN/SB 即庄位兼小盲。
+位置：BTN 庄位、SB 小盲、BB 大盲、UTG 枪口、MP 中位、HJ 劫位、CO 关煞；单挑时 BTN/SB 即庄位兼小盲。
 
 你只能从 legal_actions 中选择一个行动，并只输出一个 JSON 对象，不要输出任何其他文字，不要使用代码块：
 {"action":"fold|check|call|bet|raise|all_in","amount":整数,"thought":"一句话","notes":"可选"}
@@ -43,8 +47,6 @@ ${rules}` : ''}${style ? `
 你的打法风格（贯彻到决策和 thought 的语气里；风格服务于赢牌，不要为了演而做明显亏损的决定）：
 ${style}` : ''}`;
 
-const ACTION_ALIAS = { allin: 'all_in', all_in: 'all_in', 'all-in': 'all_in', shove: 'all_in', jam: 'all_in', bet: 'raise', raise: 'raise', fold: 'fold', check: 'check', call: 'call' };
-
 /** 从模型文本里抠出 JSON 对象（兼容 <think> 块、代码块、前后多余文字） */
 export function extractJSON(text) {
   const t = String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/```(?:json)?/gi, '');
@@ -58,54 +60,23 @@ export function extractJSON(text) {
   return null;
 }
 
-/** 把模型输出映射成合法决策；能无害修正的直接修正，修正不了的返回错误让模型重试 */
-export function validate(out, legal) {
-  if (!out || typeof out !== 'object') return { error: '没有找到 JSON 对象' };
-  const find = (t) => legal.find((x) => x.type === t);
-  const R = find('raise') || find('bet');
-  const call = find('call');
-  const a = ACTION_ALIAS[String(out.action || '').toLowerCase().trim().replace(/\s+/g, '_')];
-  const ok = (decision) => ({ decision });
-  switch (a) {
-    case 'fold':
-      return find('fold') ? ok({ type: 'fold' }) : ok({ type: 'check' }); // 能免费过牌时弃牌没有意义
-    case 'check':
-      if (find('check')) return ok({ type: 'check' });
-      return { error: `当前需要跟注 ${call.amount}，不能过牌；可选 ${legal.map((x) => x.type).join('/')}` };
-    case 'call':
-      return call ? ok({ type: 'call' }) : ok({ type: 'check' });
-    case 'raise': {
-      if (!R) return { error: `当前不允许下注/加注；可选 ${legal.map((x) => x.type).join('/')}` };
-      const amt = Math.round(Number(out.amount));
-      if (!Number.isFinite(amt)) return { error: `${R.type} 需要整数 amount（本街下注总额，范围 ${R.min_to}~${R.max_to}）` };
-      if (amt < R.min_to) return { error: `amount=${amt} 小于最小值 ${R.min_to}（amount 是本街下注总额 raise-to，不是增量）` };
-      return ok({ type: R.type, amount: Math.min(amt, R.max_to) });
-    }
-    case 'all_in':
-      if (R) return ok({ type: R.type, amount: R.max_to });
-      if (call) return ok({ type: 'call' });
-      return ok({ type: 'check' });
-    default:
-      return { error: `未知的 action "${out.action}"；只能是 ${legal.map((x) => x.type).join('/')}` };
-  }
-}
-
-const safeFallback = (legal) => (legal.find((x) => x.type === 'check') ? { type: 'check' } : { type: 'fold' });
+export const safeFallback = (legal) => (legal.find((x) => x.type === 'check') ? { type: 'check' } : { type: 'fold' });
 const clip = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
 
 /**
  * @param {object} o
  * @param {string} o.name   选手名
+ * @param {{players:number, human:string}} [o.table]  参赛人数、真人玩家名（玩家模式），写进系统提示词
  * @param {(messages:Array)=>Promise<{text:string, usage?:object}>} [o.complete]  模型调用；缺省则使用模拟 AI
  */
-export function createAgent({ name, style = '', rules = '', complete }) {
+export function createAgent({ name, style = '', rules = '', table, complete }) {
   let notes = '';
   return {
     get notes() { return notes; },
     async decide(req) {
       const request = { ...req, your_notes: notes || '（暂无）' };
       const messages = [
-        { role: 'system', content: SYSTEM_PROMPT(name, style, rules) },
+        { role: 'system', content: SYSTEM_PROMPT(name, style, rules, table) },
         { role: 'user', content: `轮到你行动。当前局面：\n${JSON.stringify(request)}` },
       ];
       const attempts = [];
