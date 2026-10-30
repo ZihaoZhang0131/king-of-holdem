@@ -28,16 +28,32 @@
 ## 运行
 
 ```bash
-cp .env.example .env      # 填 LLM_BASE_URL / LLM_API_KEY（OpenAI 兼容网关，如 Token Station）
-# 编辑 server/config.json，给每个座位填 "model"（网关里的模型名）
-npm start                 # http://localhost:8787 ，在「对局设置」浮窗点「开始比赛」
-npm test                  # 自检：引擎守恒、协议校验、假网关重试/超时（不花钱）
+npm install               # 安装依赖（Claude 走官方 SDK @anthropic-ai/sdk）
+npm start                 # http://localhost:8787 ；在「对局设置 › 模型」填 API Key、「选手」选厂商和模型，再点「开始比赛」
+npm test                  # 自检：引擎守恒、协议校验、.env 读写、假网关重试/超时（不花钱）
 ```
 
-- 某座位 `model` 为空、`mock: true`、或未配置网关时，该座位由模拟 AI 代打；`MOCK=1 npm start` 全部模拟。
+- 也可以照 `.env.example` 手写 `.env`；`server/config.json` 里每个座位写 `provider`（厂商）和 `model`。
+- 某座位 `model` 为空、`mock: true`、或它的厂商还没配 API Key 时，该座位由模拟 AI 代打；`MOCK=1 npm start` 全部模拟。
 - `enabled: false` 的座位不参赛（观战至少 2 位 AI，玩家模式至少 1 位）；「选手」页签的「AI 选手数量」按座位顺序启用前 N 位。
 - 每个座位可写 `style`（打法风格与语气），会追加进该选手的系统提示词。
 - 以上设置都可以在页面的「对局设置」浮窗里改，保存后写回 `server/config.json`；比赛进行中保存的设置在重开后生效。
+
+## 模型厂商与 API Key
+
+每个座位可以选不同厂商的模型（观战、玩家模式通用）：
+
+| 厂商 | 调用方式 | `.env` 里的 Key |
+|---|---|---|
+| Anthropic（Claude） | 官方 SDK，原生 Messages API | `ANTHROPIC_API_KEY` |
+| OpenAI / Google Gemini / 智谱 / Kimi / DeepSeek | 各家的 OpenAI 兼容接口 | `OPENAI_API_KEY` / `GEMINI_API_KEY` / `ZHIPU_API_KEY` / `MOONSHOT_API_KEY` / `DEEPSEEK_API_KEY` |
+| 自定义网关（如 Token Station） | OpenAI 兼容 | `LLM_API_KEY`，地址 `LLM_BASE_URL` |
+
+- **「对局设置 › 模型」页签**：每个厂商可以填写 / 更换 / 清除 API Key（写进服务端的 `.env`，立即生效；页面上只显示 `sk-…a1b2` 这样的掩码，完整 Key 不会发给浏览器），改 Base URL（换国际站、走代理），以及「测试连接」——拉一次模型列表验证 Key 与地址，不花 token
+- **「选手」页签**：每个座位选厂商，模型从厂商接口实时拉取的列表里选（也能手动输入），「测试模型」会发一次极小的请求验证这个模型能用（花极少量 token）
+- 老配置不用改：没写 `provider` 的座位走「自定义网关」，也就是原来的 `LLM_BASE_URL` + `LLM_API_KEY`
+- Claude 座位：不发 `temperature`；「推理强度」对应 `effort`，「JSON 模式」对应结构化输出（只能按决策格式回答）；`max_tokens` 至少 16000（思考也计入）；Opus 5.5、Sonnet 5.5、Fable 5.1 等模型默认开启服务端兜底（`fallbacks: "default"`），请求被安全策略拒绝时由 API 换模型重跑
+- 对局服务只监听 127.0.0.1，并且只接受本机页面发来的请求（校验 Host / Origin，POST 必须是 JSON），别的网站无法借你的浏览器改 Key 或操控比赛
 
 ## 玩家模式
 
@@ -76,22 +92,22 @@ npm test                  # 自检：引擎守恒、协议校验、假网关重�
 |---|---|
 | 筹码排行 | 实时排名、筹码变化、胜手数；缩小后显示领先者 |
 | 视角设置 | 荷官 / 玩家（默认：六位选手扇形排开，自动取景避开浮窗，名牌互不遮挡）/ 总览 / 俯视 / 环绕（可调速）、聚焦某位选手、导播跟随（镜头自动对准行动者）、显示开关（底牌、胜率、内心独白、公共牌条、辉光）、声音（音效、音量、环境氛围；M 键静音） |
-| 对局设置 | 观战 / 玩家模式、开始 / 暂停 / 继续 / 重开、播放速度；「选手」页签（AI 选手数量、参赛、大模型或模拟 AI、模型名、打法风格；玩家模式下还有玩家名与思考时限）、「赛制」页签（涨盲间隔、手数上限、动画节奏、对局记忆、思考时限、温度、最大输出、推理强度、JSON 模式）、「筹码」页签（起始筹码、盲注结构预设与逐级编辑）；缩小后标题栏仍有开始/暂停按钮 |
+| 对局设置 | 观战 / 玩家模式、开始 / 暂停 / 继续 / 重开、播放速度；「选手」页签（AI 选手数量、参赛、大模型或模拟 AI、厂商、模型与测试、打法风格；玩家模式下还有玩家名与思考时限）、「模型」页签（各厂商 API Key、Base URL、连接测试）、「赛制」页签（涨盲间隔、手数上限、动画节奏、对局记忆、思考时限、温度、最大输出、推理强度、JSON 模式）、「筹码」页签（起始筹码、盲注结构预设与逐级编辑）；缩小后标题栏仍有开始/暂停按钮 |
 
 音效全部由 `sfx.js` 用 Web Audio 实时合成（无音频文件）：发牌、敲桌过牌、筹码、弃牌、收池、摊牌获胜、全下、出局、涨盲、冠军，按座位左右声像摆放；浏览器要求先点一下页面才会出声。
 
-API Key 只能写在 `.env`，页面上不显示也不能修改。
+API Key 存在 `.env`（可在「模型」页签修改），页面上只显示掩码。
 - 直接用静态服务器打开 `index.html` 时进入本地演示模式（DEMO）。
 - 每场比赛的完整记录写入 `logs/match-*.jsonl`：每次决策的请求、模型原始输出、耗时、重试、笔记。
 
 ## 架构
 
 ```
-浏览器（3D 观战）  ←SSE state/status—  server/index.js  —HTTP→  OpenAI 兼容网关 → 各家模型
+浏览器（3D 观战）  ←SSE state/status—  server/index.js  —HTTP→  Anthropic SDK / 各家 OpenAI 兼容接口
                    —POST /api/control→      │
                    —POST /api/act→          │（玩家模式：真人行动；SSE turn 事件推送可选行动）
                    —GET/POST /api/config→   │（对局设置，校验后写回 config.json）
-                         game/engine.js（规则与玩法，浏览器演示也直接复用） → agent.js（提示词/解析/校验） → llm.js
+                         game/engine.js（规则与玩法，浏览器演示也直接复用） → agent.js（提示词/解析/校验） → providers.js（按厂商分发：anthropic.js / llm.js）
 ```
 
 API Key 只在服务端读取，浏览器拿不到。观战时浏览器会收到所有底牌；玩家模式下只收到玩家能看到的部分（`viewFor`）；每个模型只看得到自己的底牌。

@@ -1,9 +1,14 @@
 import http from 'node:http';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { createTournament, viewFor } from '../game/engine.js';
 import { createAgent, extractJSON, validate } from './agent.js';
 import { chatComplete } from './llm.js';
+import { setEnvVar, parseEnv } from './envfile.js';
+import { buildRequest, DECISION_SCHEMA } from './anthropic.js';
+import { createProviders } from './providers.js';
 import { sanitizeConfig, formatConfig } from './config.js';
 
 /**
@@ -122,7 +127,13 @@ function configTest() {
   assert.equal(ok({ ...base, mode: 'bogus', humanTimeoutMs: -3 }).mode, base.mode);
   assert.equal(ok({ ...base, humanTimeoutMs: 0 }).humanTimeoutMs, 0);
   bad({ mode: 'play', players: base.players.map((p) => ({ ...p, enabled: false })) }, '至少需要 1 位 AI');
-  console.log('✓ 设置：范围夹取、盲注递增、参赛人数、选手名锁定、玩法参数、玩家模式、落盘格式');
+  // 厂商：未知厂商保持原值；Base URL 去掉末尾斜杠、空串删除、非 http(s) 报错
+  const pv = ok({ ...base, players: base.players.map((p, i) => ({ ...p, provider: ['anthropic', 'bogus'][i] ?? p.provider })),
+    providers: { custom: { baseURL: ' https://gw.example.com/v1/ ' }, openai: { baseURL: '' }, nope: { baseURL: 'x' } } });
+  assert.deepEqual(pv.players.slice(0, 3).map((p) => p.provider), ['anthropic', 'custom', 'custom']);
+  assert.deepEqual(pv.providers, { custom: { baseURL: 'https://gw.example.com/v1' } });
+  bad({ providers: { openai: { baseURL: 'javascript:alert(1)' } } }, 'Base URL');
+  console.log('✓ 设置：范围夹取、盲注递增、参赛人数、选手名锁定、玩法参数、玩家模式、厂商与 Base URL、落盘格式');
 }
 
 // ---------- 2. protocol ----------
@@ -142,6 +153,44 @@ function protocolTest() {
   assert.deepEqual(validate({ action: 'call' }, freeLegal).decision, { type: 'check' });
   assert.ok(validate({ action: 'dance' }, legal).error);
   console.log('✓ 协议：JSON 抽取与行动校验');
+}
+
+// ---------- 2b. providers ----------
+function providerTest() {
+  // .env：按变量替换 / 删除，其余行原样保留
+  const dir = mkdtempSync(path.join(tmpdir(), 'holdem-'));
+  const file = path.join(dir, '.env');
+  writeFileSync(file, '# 网关\nLLM_BASE_URL=https://gw.example.com/v1\nLLM_API_KEY=old\nPORT=8787\n');
+  setEnvVar(file, 'LLM_API_KEY', 'sk-new-key-123456');
+  setEnvVar(file, 'OPENAI_API_KEY', 'sk-openai-abcdefgh');
+  setEnvVar(file, 'PORT', null);
+  assert.equal(readFileSync(file, 'utf8'), '# 网关\nLLM_BASE_URL=https://gw.example.com/v1\nLLM_API_KEY=sk-new-key-123456\nOPENAI_API_KEY=sk-openai-abcdefgh\n');
+
+  // 运行时：掩码不泄露完整 Key、配置判断、改 Key 写回 .env 并立即生效
+  const env = parseEnv(readFileSync(file, 'utf8'));
+  const p = createProviders({ env, envFile: file, config: () => ({ providers: {} }) });
+  const view = p.view();
+  assert.ok(!JSON.stringify(view).includes('sk-new-key-123456') && !JSON.stringify(view).includes('sk-openai-abcdefgh'), '状态里泄露了完整 Key');
+  assert.equal(view.find((v) => v.id === 'custom').masked, 'sk-…3456');
+  assert.deepEqual(view.filter((v) => v.configured).map((v) => v.id), ['openai', 'custom']);
+  assert.equal(p.setKey('anthropic', 'has space here').ok, false);
+  assert.equal(p.setKey('anthropic', 'sk-ant-test-0000000').ok, true);
+  assert.ok(p.configured('anthropic') && env.ANTHROPIC_API_KEY === 'sk-ant-test-0000000');
+  assert.equal(p.setKey('openai', null).ok, true);
+  assert.ok(!p.configured('openai') && !readFileSync(file, 'utf8').includes('OPENAI_API_KEY'));
+  rmSync(dir, { recursive: true, force: true });
+
+  // Anthropic 请求体：system 拆出、不带 temperature、effort 与结构化输出、max_tokens 下限、只在支持的模型上开兜底
+  const msgs = [{ role: 'system', content: 'S' }, { role: 'user', content: 'U1' }, { role: 'assistant', content: 'A' }, { role: 'user', content: 'U2' }];
+  const r = buildRequest({ model: 'claude-opus-5-5', messages: msgs, maxTokens: 2000, effort: 'low', jsonMode: true });
+  assert.equal(r.system, 'S');
+  assert.deepEqual(r.messages.map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.equal(r.max_tokens, 16000);
+  assert.ok(!('temperature' in r) && !('thinking' in r));
+  assert.deepEqual(r.output_config, { effort: 'low', format: { type: 'json_schema', schema: DECISION_SCHEMA } });
+  assert.equal(r.fallbacks, 'default');
+  assert.ok(!('fallbacks' in buildRequest({ model: 'claude-haiku-5-5', messages: msgs })));
+  console.log('✓ 厂商：.env 读写、Key 掩码、改 Key 立即生效、Anthropic 请求体');
 }
 
 // ---------- 3. gateway ----------
@@ -217,5 +266,6 @@ await engineTest(10, [true, true, true, false, false, false, true], { squid: { e
 }
 configTest();
 protocolTest();
+providerTest();
 await gatewayTest();
 console.log('全部通过');

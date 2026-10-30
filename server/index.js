@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { createTournament, Aborted, initialPlayers, modesView, viewFor } from '../game/engine.js';
 import { modeRules, modeTitle, resolveModes } from '../game/modes.js';
 import { createAgent, validate, safeFallback } from './agent.js';
-import { chatComplete } from './llm.js';
 import { sanitizeConfig, formatConfig } from './config.js';
+import { createProviders } from './providers.js';
+import { providerOf, DEFAULT_PROVIDER } from './provider-list.js';
 
 /**
  * 本地对局服务：
@@ -17,7 +18,13 @@ import { sanitizeConfig, formatConfig } from './config.js';
  *   POST /api/act       玩家模式：真人玩家的行动 {type: fold | check | call | bet | raise | all_in, amount?}
  *   SSE  event "turn"   轮到真人玩家时的可选行动（不轮到时为 null）
  *   GET  /api/config    对局设置（不含 API Key）；POST 同路径校验后写回 config.json
- * API Key 只在服务端读取（.env），永远不会发给浏览器。
+ *   GET  /api/providers              各厂商状态（Key 只给掩码）
+ *   POST /api/providers/key          {provider, key | null} 填写 / 更换 / 清除 API Key（写回 .env）
+ *   POST /api/providers/test         {provider} 连接测试：拉一次模型列表
+ *   GET  /api/providers/models       ?provider=&refresh=1 模型列表
+ *   POST /api/providers/test-model   {provider, model} 模型测试：一次极小的真实调用
+ * API Key 只在服务端读写（.env），永远不会完整地发给浏览器。
+ * 只监听 127.0.0.1；所有接口校验 Host，POST 还要求本机 Origin 与 JSON 请求体，防止别的网页借你的浏览器调用。
  */
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,10 +36,9 @@ function loadEnv(file) {
     if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
   }
 }
-loadEnv(path.join(ROOT, '.env'));
+const ENV_FILE = path.join(ROOT, '.env');
+loadEnv(ENV_FILE);
 
-const BASE_URL = process.env.LLM_BASE_URL || '';
-const API_KEY = process.env.LLM_API_KEY || '';
 const PORT = Number(process.env.PORT || 8787);
 const FORCE_MOCK = process.env.MOCK === '1';
 // 每场新比赛开始前重读 config.json：改模型、风格、赛制后点「重开比赛」即可生效
@@ -40,13 +46,15 @@ const CONFIG_FILE = path.join(ROOT, 'server', 'config.json');
 const readConfig = () => JSON.parse(readFileSync(CONFIG_FILE, 'utf8'));
 // 座位 0–5 是 AI，最后一个（6 号）是真人玩家：观战模式下不参赛，玩家模式下由浏览器操作
 let config, seats, HUMAN, playing;
+const providers = createProviders({ env: process.env, envFile: ENV_FILE, config: () => config });
 function loadConfig() {
   config = readConfig();
   playing = config.mode === 'play';
   HUMAN = config.players.length;
   seats = config.players.map((p) => {
-    const opts = { ...config.defaults, ...p };
-    const mock = FORCE_MOCK || !!p.mock || !p.model || !BASE_URL || !API_KEY;
+    const opts = { ...config.defaults, ...p, provider: providerOf(p.provider) ? p.provider : DEFAULT_PROVIDER };
+    // 没填模型、或这个厂商还没配 Key 的座位由模拟 AI 代打
+    const mock = FORCE_MOCK || !!p.mock || !p.model || !providers.configured(opts.provider);
     return { ...opts, enabled: p.enabled !== false, mock };
   });
   seats.push({ name: config.human?.name || '你', human: true, enabled: playing, mock: false });
@@ -78,7 +86,7 @@ function lobbyState() {
 
 const status = () => ({
   mode: 'live', play: playing, humanSeat: HUMAN, running, paused, finished, speed, pendingConfig,
-  players: seats.map((s) => ({ name: s.name, model: s.mock || s.human ? null : s.model, mock: s.mock, human: !!s.human, enabled: s.enabled, style: s.style || '' })),
+  players: seats.map((s) => ({ name: s.name, provider: s.human ? null : s.provider, model: s.mock || s.human ? null : s.model, mock: s.mock, human: !!s.human, enabled: s.enabled, style: s.style || '' })),
 });
 function broadcast(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -145,7 +153,7 @@ function startMatch() {
   mkdirSync(path.join(ROOT, 'logs'), { recursive: true });
   const logFile = path.join(ROOT, 'logs', `match-${new Date().toISOString().replace(/[:.]/g, '-')}.jsonl`);
   const log = (rec) => appendFileSync(logFile, JSON.stringify({ t: Date.now(), ...rec }) + '\n');
-  const who = (s) => (s.human ? 'human' : s.mock ? 'mock' : s.model);
+  const who = (s) => (s.human ? 'human' : s.mock ? 'mock' : `${s.provider}/${s.model}`);
   log({ type: 'start', seats: seats.map((s) => ({ name: s.name, enabled: s.enabled, model: who(s), style: s.style })), config: { ...config, players: undefined } });
 
   const rules = modeRules(config.modes);
@@ -155,8 +163,8 @@ function startMatch() {
     style: s.style,
     rules,
     table,
-    complete: s.mock ? null : (messages) => chatComplete({
-      baseURL: BASE_URL, apiKey: API_KEY, model: s.model, messages,
+    complete: s.mock ? null : (messages) => providers.complete(s.provider, {
+      model: s.model, messages,
       temperature: s.temperature, maxTokens: s.maxTokens, jsonMode: s.jsonMode, extraBody: s.extraBody,
       timeoutMs: config.decisionTimeoutMs,
     }),
@@ -206,11 +214,17 @@ function saveConfig(input) {
   broadcast('status', status());
   return { ok: true, ...configView() };
 }
-const configView = () => {
-  let host = '';
-  try { host = new URL(BASE_URL).host; } catch { /* 未配置 */ }
-  return { config: readConfig(), gateway: { configured: !!(BASE_URL && API_KEY), host }, forceMock: FORCE_MOCK };
-};
+const configView = () => ({ config: readConfig(), providers: providers.view(), forceMock: FORCE_MOCK });
+
+// 改了 Key 之后，大厅里哪些座位由模拟 AI 代打可能会变：未开赛立刻刷新，进行中则重开后生效
+function setKey(input) {
+  const r = providers.setKey(input?.provider, input?.key);
+  if (!r.ok) return r;
+  if (running) pendingConfig = true;
+  else { loadConfig(); lastState = lobbyState(); broadcast('state', lastState); }
+  broadcast('status', status());
+  return { ok: true, providers: providers.view() };
+}
 
 function readBody(req, cb) {
   let body = '';
@@ -222,6 +236,17 @@ function readBody(req, cb) {
   });
 }
 const json = (res, data) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(data));
+const jsonAsync = (res, p) => p.then((d) => json(res, d), (e) => json(res, { ok: false, error: e.message }));
+
+// 只接受本机来源：Host 必须是本机（防 DNS 重绑定）；POST 的 Origin 若存在必须是本机，且必须是 JSON（跨站请求会先被预检拦下）
+const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]'].map((h) => `${h}:${PORT}`));
+function allowed(req) {
+  if (!LOCAL.has(req.headers.host)) return false;
+  if (req.method !== 'POST') return true;
+  const origin = req.headers.origin;
+  if (origin && !LOCAL.has(origin.replace(/^https?:\/\//, ''))) return false;
+  return /^application\/json\b/.test(req.headers['content-type'] || '');
+}
 
 // ---------- http ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
@@ -238,6 +263,7 @@ function serveStatic(req, res, pathname) {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
+  if ((url.pathname === '/events' || url.pathname.startsWith('/api/')) && !allowed(req)) { res.writeHead(403).end('forbidden'); return; }
   if (url.pathname === '/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
     res.write(`event: status\ndata: ${JSON.stringify(status())}\n\n`);
@@ -253,6 +279,14 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/api/control' && req.method === 'POST') return readBody(req, (cmd) => json(res, control(cmd.cmd, cmd.value)));
   if (url.pathname === '/api/act' && req.method === 'POST') return readBody(req, (a) => json(res, act(a)));
+  if (url.pathname === '/api/providers' && req.method === 'GET') return json(res, providers.view());
+  if (url.pathname === '/api/providers/key' && req.method === 'POST') return readBody(req, (b) => json(res, setKey(b)));
+  if (url.pathname === '/api/providers/test' && req.method === 'POST') return readBody(req, (b) => jsonAsync(res, providers.testProvider(b.provider).then((test) => ({ ok: test.ok, test, providers: providers.view() }))));
+  if (url.pathname === '/api/providers/models' && req.method === 'GET') {
+    const id = url.searchParams.get('provider');
+    return jsonAsync(res, providers.listModels(id, { refresh: url.searchParams.get('refresh') === '1' }).then((models) => ({ ok: true, models })));
+  }
+  if (url.pathname === '/api/providers/test-model' && req.method === 'POST') return readBody(req, (b) => jsonAsync(res, providers.testModel(b.provider, String(b.model || '').trim())));
   if (url.pathname === '/api/config') {
     if (req.method === 'POST') return readBody(req, (cfg) => json(res, saveConfig(cfg)));
     return json(res, configView());
@@ -264,7 +298,7 @@ setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 20000
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`《德扑之王》对局服务已启动：http://localhost:${PORT}`);
-  console.log(`网关：${BASE_URL || '（未配置）'}`);
+  console.log(`已配置的厂商：${providers.view().filter((p) => p.configured).map((p) => p.name).join('、') || '（无，全部由模拟 AI 代打）'}`);
   console.log(`模式：${playing ? '玩家模式' : '观战'}`);
-  seats.forEach((s) => console.log(`  ${s.name.padEnd(9)} ${!s.enabled ? '不参赛' : s.human ? '真人玩家' : s.mock ? '模拟 AI' : s.model}`));
+  seats.forEach((s) => console.log(`  ${s.name.padEnd(9)} ${!s.enabled ? '不参赛' : s.human ? '真人玩家' : s.mock ? '模拟 AI' : `${providerOf(s.provider).name} · ${s.model}`}`));
 });

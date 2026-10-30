@@ -145,6 +145,28 @@
   .stepper button:disabled { opacity: .35; cursor: default; }
   .stepper b { min-width: 26px; text-align: center; font: 800 15px/1 "Helvetica Neue", Arial, sans-serif; color: #ffe2a0; }
   .seat.me .seat-head { cursor: default; }
+  /* 厂商与模型 */
+  .seat-body select, .mp-bulk select { font: inherit; font-size: 12.5px; color: #f0eefa; background: rgba(0,0,0,.3); border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: 5px 6px; outline: none; max-width: 180px; }
+  .seat-body select:focus, .mp-bulk select:focus { border-color: rgba(216,179,106,.7); }
+  .seat-body select option, .mp-bulk select option { background: #1a1430; }
+  .mp-bulk select { flex: none; max-width: 110px; }
+  .mdl { display: inline-flex; gap: 4px; align-items: center; }
+  .seat-body .fd-c .mdl input[type=text] { width: 148px; }
+  button.ico { width: 28px; height: 28px; padding: 0; justify-content: center; flex: none; }
+  .win button:disabled { opacity: .45; cursor: default; }
+  .ok-t { color: #4fe39a; } .warn-t { color: #ffb43c; }
+  .prov { --pc: #7d77a0; border-radius: 12px; background: rgba(255,255,255,.035); border: 1px solid rgba(255,255,255,.06); border-left: 3px solid var(--pc); padding: 9px 10px 4px; margin-bottom: 8px; }
+  .prov[data-state="set"] { --pc: #d8b36a; } .prov[data-state="ok"] { --pc: #4fe39a; } .prov[data-state="bad"] { --pc: #ff6b7d; }
+  .prov-head { display: flex; align-items: center; gap: 7px; }
+  .prov-head b { font-size: 13px; } .prov-head small { font-size: 10.5px; color: #827ca4; }
+  .pdot { width: 8px; height: 8px; border-radius: 50%; background: var(--pc); box-shadow: 0 0 8px var(--pc); flex: none; }
+  .prov-st { margin-left: auto; font-size: 11px; color: #a99fd0; white-space: nowrap; }
+  .prov-st code { color: #ffe2a0; font-size: 11px; }
+  .prov-key { display: flex; gap: 6px; margin: 8px 0 2px; }
+  .win .prov-key input { flex: 1; min-width: 0; }
+  .prov-key button { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+  .prov-msg { margin: 4px 0 0; font-size: 11px; color: #c9c3e6; }
+  .win .prov input.url { width: 168px; }
   .mp-status { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; min-height: 22px; }
   .mp-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 999px; font-size: 12px;
     background: rgba(255,255,255,.08); color: #cfc8ee; white-space: nowrap; }

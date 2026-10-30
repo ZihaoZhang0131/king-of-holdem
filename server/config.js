@@ -5,6 +5,7 @@
  */
 
 import { sanitizeModes } from '../game/modes.js';
+import { PROVIDER_IDS, DEFAULT_PROVIDER } from './provider-list.js';
 
 const int = (v, lo, hi, d) => {
   const n = Math.round(Number(v));
@@ -56,7 +57,8 @@ export function sanitizeConfig(input, current) {
   const inPlayers = Array.isArray(input.players) ? input.players : [];
   const players = c.players.map((p, i) => {
     const q = inPlayers[i] || {};
-    const out = { ...p, model: str(q.model, 120, p.model), style: str(q.style, 600, p.style || '') };
+    const provider = PROVIDER_IDS.includes(q.provider) ? q.provider : PROVIDER_IDS.includes(p.provider) ? p.provider : DEFAULT_PROVIDER;
+    const out = { ...p, provider, model: str(q.model, 120, p.model), style: str(q.style, 600, p.style || '') };
     out.enabled = bool(q.enabled, p.enabled !== false);
     out.mock = bool(q.mock, !!p.mock);
     if (out.enabled) delete out.enabled; // 默认参赛，不写进文件
@@ -73,9 +75,19 @@ export function sanitizeConfig(input, current) {
   let humanTimeoutMs = int(input.humanTimeoutMs, 0, 600000, c.humanTimeoutMs || 0);
   if (humanTimeoutMs > 0) humanTimeoutMs = Math.max(5000, humanTimeoutMs);
 
+  // 各厂商的 Base URL 覆盖（不是秘密，Key 在 .env）：空串 = 用默认地址
+  const providers = {};
+  for (const id of PROVIDER_IDS) {
+    const q = input.providers?.[id], cur = c.providers?.[id]?.baseURL || '';
+    const v = q && typeof q.baseURL === 'string' ? q.baseURL.trim().replace(/\/+$/, '') : cur;
+    if (v && !/^https?:\/\/[^\s/]+(\/\S*)?$/.test(v)) return { error: `Base URL 无效：${v}` };
+    if (v) providers[id] = { baseURL: v };
+  }
+
   return {
     config: {
       ...c,
+      providers,
       startingStack,
       handsPerLevel: int(input.handsPerLevel, 1, 200, c.handsPerLevel),
       blinds: levels,
